@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DecisionForge backend test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 900px; margin: 1.5rem auto; padding: 0 1rem; line-height: 1.45; }
+  h1 { font-size: 1.3rem; } h2 { font-size: 1.05rem; margin-top: 1.8rem; }
+  fieldset { border: 1px solid #8884; margin: 1rem 0; }
+  .row { display: grid; grid-template-columns: 230px 1fr 70px; gap: .6rem; align-items: center; margin: .25rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid #8885; padding: .3rem .5rem; text-align: left; }
+  .warn { border: 1px solid #c80; padding: .5rem .8rem; margin: .8rem 0; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; }
+  pre { overflow: auto; border: 1px solid #8884; padding: .6rem; max-height: 260px; font-size: .8rem; }
+  button { padding: .4rem .9rem; margin-right: .4rem; }
+</style>
+</head>
+<body>
+<h1>DecisionForge: backend test page</h1>
+
+<h2>1. Health</h2>
+<p id="health">Checking...</p>
+<button id="btn-health">Re-check</button>
+<button id="btn-selftest">Run LLM JSON self-test</button>
+<span id="selftest"></span>
+
+<h2 id="title">2. Decision</h2>
+<p id="question"></p>
+
+<fieldset><legend>Criteria weights</legend><div id="weights"></div></fieldset>
+<fieldset><legend>Assumptions (percent change vs baseline)</legend><div id="variables"></div></fieldset>
+
+<button id="btn-score">Score</button>
+<button id="btn-scenario">Compare with baseline</button>
+<button id="btn-breakeven">What would change the answer?</button>
+<button id="btn-reset">Reset sliders</button>
+
+<div id="warning"></div>
+<div id="output"></div>
+<h2>Raw response</h2>
+<pre id="raw">(nothing yet)</pre>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let decision = null;
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  $("raw").textContent = JSON.stringify(data, null, 2);
+  return data;
+}
+
+function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function table(head, rows) {
+  return "<table><tr>" + head.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr>" +
+    rows.map((r) => "<tr>" + r.map((c) => `<td>${esc(c)}</td>`).join("") + "</tr>").join("") + "</table>";
+}
+const optName = (id) => decision.options.find((o) => o.id === id).name;
+
+function slider(container, id, label, min, max, value, step) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<label for="s-${id}">${esc(label)}</label>
+    <input type="range" id="s-${id}" min="${min}" max="${max}" step="${step}" value="${value}">
+    <output id="o-${id}">${value}</output>`;
+  container.appendChild(row);
+  const input = row.querySelector("input");
+  input.addEventListener("input", () => { row.querySelector("output").textContent = input.value; });
+}
+
+function readWeights() { return Object.fromEntries(decision.dimensions.map((d) => [d.id, +$("s-w-" + d.id).value])); }
+function readVars() { return Object.fromEntries(decision.variables.map((v) => [v.id, +$("s-v-" + v.id).value])); }
+
+function showWarning(unsourced) {
+  $("warning").innerHTML = unsourced && unsourced.length
+    ? `<div class="warn"><b>Placeholder data.</b> ${unsourced.length} input(s) are not yet sourced
+       (${esc(unsourced.slice(0, 4).join(", "))}${unsourced.length > 4 ? ", ..." : ""}).
+       These scores are for testing, not findings.</div>` : "";
+}
+
+function scoreTable(r) {
+  const rows = r.options.map((o) => [o.name, o.total.toFixed(1)]);
+  const dims = decision.dimensions.map((d) => [d.name, ...r.options.map((o) => {
+    const x = o.dimensions.find((q) => q.dimension_id === d.id);
+    return `${x.metric_value} ${d.unit} (score ${x.score})`;
+  })]);
+  return table(["Option", "Total (0-100)"], rows) + "<br>" + table(["Dimension", ...r.options.map((o) => o.name)], dims);
+}
+
+async function health() {
+  try {
+    const h = await api("/health");
+    const l = h.llm;
+    $("health").innerHTML = l.reachable
+      ? (l.model_available ? `<span class="ok">Ollama connected, model ${esc(l.model)} ready.</span>`
+        : `<span class="bad">Ollama is running but model ${esc(l.model)} is missing.</span> Run: ollama pull ${esc(l.model)}`)
+      : `<span class="bad">Ollama not reachable.</span> Start Ollama and refresh. (${esc(l.error)})`;
+  } catch (e) { $("health").innerHTML = `<span class="bad">Backend error: ${esc(e.message)}</span>`; }
+}
+
+async function init() {
+  health();
+  const list = await api("/decisions");
+  decision = await api("/decisions/" + list[0].id);
+  $("title").textContent = "2. Decision: " + decision.title;
+  $("question").textContent = decision.question;
+  decision.dimensions.forEach((d) => slider($("weights"), "w-" + d.id, d.name, 0, 100, Math.round(d.default_weight * 100), 1));
+  decision.variables.forEach((v) => slider($("variables"), "v-" + v.id, v.name, v.min, v.max, v.default, 1));
+}
+
+$("btn-health").onclick = health;
+$("btn-selftest").onclick = async () => {
+  $("selftest").textContent = "running...";
+  try { const r = await api("/llm/selftest", {});
+    $("selftest").innerHTML = r.ok ? `<span class="ok">Valid JSON in ${r.seconds}s</span>` : `<span class="bad">Wrong answer in ${r.seconds}s</span>`;
+  } catch (e) { $("selftest").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+};
+
+$("btn-score").onclick = async () => {
+  try {
+    const r = await api(`/decisions/${decision.id}/score`, { weights: readWeights(), variables: readVars() });
+    showWarning(r.unsourced_inputs);
+    $("output").innerHTML = `<h2>Recommendation: ${esc(optName(r.winner))} (leads by ${r.margin} points)</h2>` + scoreTable(r);
+  } catch (e) { $("output").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+};
+
+$("btn-scenario").onclick = async () => {
+  try {
+    const r = await api(`/decisions/${decision.id}/scenario`, { weights: readWeights(), scenario_variables: readVars() });
+    showWarning(r.baseline.unsourced_inputs);
+    $("output").innerHTML = `<h2>${esc(r.explanation)}</h2>` +
+      (r.unsourced_effects.length ? `<p class="warn">Assumption effects still placeholder: ${esc(r.unsourced_effects.join("; "))}</p>` : "") +
+      table(["Dimension", "Lead before", "Lead after", "Change"],
+        r.shifts.map((s) => [s.name, s.lead_before, s.lead_after, s.delta])) +
+      (r.changed_variables.length ? "<br>" + table(["Assumption changed", "From", "To", "Flips result alone?"],
+        r.changed_variables.map((v) => [v.name, v.baseline, v.scenario, v.flips_alone ? "yes" : "no"])) : "");
+  } catch (e) { $("output").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+};
+
+$("btn-breakeven").onclick = async () => {
+  try {
+    const r = await api(`/decisions/${decision.id}/breakeven`, { weights: readWeights(), variables: readVars() });
+    const fmt = (f) => f ? `flips to ${optName(f.new_winner)} at ${f.value}` : "no flip in range";
+    $("output").innerHTML = `<h2>Currently recommended: ${esc(optName(r[0].winner_now))}</h2>` +
+      table(["Assumption", "Now", "If it rises", "If it falls"], r.map((b) => [b.name, b.current, fmt(b.flip_up), fmt(b.flip_down)]));
+  } catch (e) { $("output").innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+};
+
+$("btn-reset").onclick = () => {
+  decision.dimensions.forEach((d) => { const s = $("s-w-" + d.id); s.value = Math.round(d.default_weight * 100); s.dispatchEvent(new Event("input")); });
+  decision.variables.forEach((v) => { const s = $("s-v-" + v.id); s.value = v.default; s.dispatchEvent(new Event("input")); });
+};
+
+init().catch((e) => { $("health").innerHTML = `<span class="bad">${esc(e.message)}</span>`; });
+</script>
+</body>
+</html>

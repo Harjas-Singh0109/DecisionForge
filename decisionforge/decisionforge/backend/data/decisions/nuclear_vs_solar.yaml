@@ -1,0 +1,123 @@
+# Nuclear vs solar for India: decision config.
+#
+# !!! EVERY NUMBER BELOW IS A PLACEHOLDER !!!
+# They exist only so the engine can be built and tested. They are NOT research findings.
+# During the research phase, replace each value, set `provenance: sourced`, and list
+# `source_ids`. The API reports every remaining placeholder so the UI can warn users.
+#
+# Scoring: `worst` maps to 0, `best` maps to 100 (linear, clamped).
+# Variables are percent changes vs baseline. Effect elasticity = fractional change in the
+# metric per 1% change in the variable (also a placeholder until sourced).
+
+id: nuclear_vs_solar_india
+title: Nuclear vs solar for India
+question: Should India prioritise nuclear energy or solar energy over the next 10 years?
+horizon_years: 10
+
+options:
+  - id: nuclear
+    name: Nuclear
+    description: Large-scale expansion of nuclear power capacity.
+  - id: solar
+    name: Solar + storage
+    description: Large-scale expansion of solar generation with battery storage.
+
+dimensions:
+  - id: cost
+    name: Cost of electricity
+    description: Levelised cost including integration (lower is better).
+    unit: INR/kWh
+    default_weight: 0.25
+    worst: 10
+    best: 2
+    values:
+      nuclear: {value: 6.0, note: "ILLUSTRATIVE - replace with sourced value"}
+      solar:   {value: 5.8, note: "ILLUSTRATIVE - replace with sourced value"}
+
+  - id: speed
+    name: Time to deploy
+    description: Typical time from decision to operation (lower is better).
+    unit: years
+    default_weight: 0.20
+    worst: 12
+    best: 1
+    values:
+      nuclear: {value: 8, note: "ILLUSTRATIVE - replace with sourced value"}
+      solar:   {value: 2.0, note: "ILLUSTRATIVE - replace with sourced value"}
+
+  - id: scale
+    name: Scale achievable in 10 years
+    description: Realistic additional capacity (higher is better).
+    unit: GW
+    default_weight: 0.20
+    worst: 0
+    best: 300
+    values:
+      nuclear: {value: 30, note: "ILLUSTRATIVE - replace with sourced value"}
+      solar:   {value: 110, note: "ILLUSTRATIVE - replace with sourced value"}
+
+  - id: firmness
+    name: Round-the-clock reliability
+    description: Average capacity factor, a proxy for firm supply (higher is better).
+    unit: "% capacity factor"
+    default_weight: 0.20
+    worst: 15
+    best: 90
+    values:
+      nuclear: {value: 85, note: "ILLUSTRATIVE - replace with sourced value"}
+      solar:   {value: 28, note: "ILLUSTRATIVE - replace with sourced value"}
+
+  - id: delivery_risk
+    name: Delivery risk
+    description: Typical cost and schedule overrun (lower is better).
+    unit: "% overrun"
+    default_weight: 0.15
+    worst: 100
+    best: 0
+    values:
+      nuclear: {value: 45, note: "ILLUSTRATIVE - replace with sourced value"}
+      solar:   {value: 25, note: "ILLUSTRATIVE - replace with sourced value"}
+
+variables:
+  - id: storage_cost
+    name: Battery storage cost
+    description: Change in the cost of grid-scale battery storage.
+    min: -60
+    max: 60
+    effects:
+      - {dimension: cost, option: solar, elasticity: 0.35, note: "ILLUSTRATIVE - storage share of solar system cost"}
+
+  - id: nuclear_capex
+    name: Nuclear construction cost
+    description: Change in nuclear capital cost per kW.
+    min: -50
+    max: 100
+    effects:
+      - {dimension: cost, option: nuclear, elasticity: 0.60, note: "ILLUSTRATIVE - capex share of nuclear LCOE"}
+
+  - id: nuclear_delay
+    name: Nuclear build time
+    description: Change in typical nuclear construction duration.
+    min: -40
+    max: 80
+    effects:
+      - {dimension: speed, option: nuclear, elasticity: 1.0}
+      - {dimension: delivery_risk, option: nuclear, elasticity: 0.5}
+
+  - id: solar_firming
+    name: Solar firming (storage deployed)
+    description: Change in how much of solar output is made dispatchable.
+    min: -30
+    max: 100
+    effects:
+      - {dimension: firmness, option: solar, elasticity: 0.5}
+      - {dimension: cost, option: solar, elasticity: 0.15}
+
+  - id: grid_constraints
+    name: Grid and land constraints
+    description: Change in how hard it is to connect large solar to the grid.
+    min: -40
+    max: 100
+    effects:
+      - {dimension: scale, option: solar, elasticity: -0.4}
+      - {dimension: delivery_risk, option: solar, elasticity: 1.0}
